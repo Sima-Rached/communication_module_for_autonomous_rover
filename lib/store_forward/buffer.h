@@ -1,24 +1,18 @@
 #pragma once
 #include "../protocol/message.h"
 
-// ============================================================
 // StoreForwardBuffer (COMMS-9)
-//
+
 // Simple fixed-size ring buffer of TelemetryMsg, used when the link
-// is down (LinkManager::isLinkLost() == true). On reconnect, flush()
-// drains it through LinkManager in order.
-//
-// Deliberately in-RAM only for the prototype (no SD card / flash
-// persistence yet) — fine for short field-comms gaps; revisit if you
-// need to survive a power cycle while out of range.
-// ============================================================
+// is down (LinkManager::isLinkLost() == true). On reconnect,
+// flush() drains it through LinkManager in order.
 
 class StoreForwardBuffer {
 public:
     static constexpr size_t CAPACITY = 32;
 
-    // Returns false if buffer is full (oldest entries are NOT
-    // overwritten silently — caller should know data is being dropped).
+    // Returns false if buffer is full
+    // (oldest entries are NOT overwritten silently).
     bool push(const TelemetryMsg& msg);
 
     bool isEmpty() const { return _count == 0; }

@@ -1,10 +1,8 @@
-// ============================================================
-// Native test (no ESP32 hardware needed) — run with:
-//   pio test -e native
-//
+// Native test run with pio test -e native
+
 // Satisfies COMMS-4's DoD: "encode -> decode -> matches original,
 // zero data loss."
-// ============================================================
+
 #include <unity.h>
 #include <cstring>
 #include "../../lib/protocol/message.h"

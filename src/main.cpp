@@ -2,27 +2,29 @@
 #include "../lib/transport/transport_wifi.h"
 #include "../lib/link_manager/link_manager.h"
 #include "../lib/store_forward/buffer.h"
+#include "../lib/mission/mission_controller.h"
 
 #if defined(NODE_ROLE_ROVER)
 #include "../lib/uart_bridge/uart_bridge.h"
 #endif
 
-// ============================================================
 // Wi-Fi credentials for the peer-to-peer AP link (Phase A only).
 // Ground Control Station (GCS) board runs the Access Point (AP) with these creds; rover board joins it.
-// Move to a not-committed secrets header once past desk-testing.
-// ============================================================
+
 static const char* WIFI_SSID = "rover-proto";
 static const char* WIFI_PASS = "roverpass123";
 static const uint16_t WIFI_PORT = 4210;
 
-// ---- Shared objects ----
+//  Shared objects 
 WiFiTransport transport(WIFI_SSID, WIFI_PASS, WIFI_PORT);
 LinkManager linkManager(&transport);
 StoreForwardBuffer storeForward;
 
 #if defined(NODE_ROLE_ROVER)
-UartBridge uartBridge(Serial2); // UART2 reserved for Pi link, Serial (USB) stays free for debug
+UartBridge uartBridge(Serial2); // UART2 reserved for Pi link
+
+// Owns mission state + the autonomous low-battery-return decision.
+MissionController missionController(/* lowBatteryThresholdPercent = */ 20);
 #endif
 
 uint32_t lastTelemetrySampleMs = 0;
@@ -53,28 +55,31 @@ void setup() {
 }
 
 #if defined(NODE_ROLE_ROVER)
-// ------------------------------------------------------------
 // ROVER role: sample fake telemetry (placeholder for real ROS2/
 // Pi data once uartBridge.receiveFromPi-style flow is fleshed
 // out further), send it, and forward any GCS command up to the Pi.
-// ------------------------------------------------------------
 void loopRover() {
-    // 1. Periodically build + send telemetry (placeholder values —
-    //    replace with real data relayed from the Pi over UART).
+    // 0. Update mission/status state from the rover's OWN sensor readings. 
+    uint8_t currentBatteryPercent = 82; // placeholder 
+    bool obstacleDetected = false;      // placeholder 
+    missionController.update(currentBatteryPercent, obstacleDetected);
+
+    // 1. Periodically build + send telemetry (placeholder values).
     uint32_t now = millis();
     if (now - lastTelemetrySampleMs >= TELEMETRY_SAMPLE_INTERVAL_MS) {
         lastTelemetrySampleMs = now;
 
         TelemetryMsg msg;
-        msg.timestampMs = now;
-        msg.batteryPercent = 82; // placeholder
-        msg.posX = 0.0f;         // placeholder
-        msg.posY = 0.0f;         // placeholder
-        msg.status = RoverStatus::NAVIGATING;
+        msg.timestampMs    = now;
+        msg.batteryPercent = currentBatteryPercent;
+        msg.posX            = 0.0f; // placeholder
+        msg.posY            = 0.0f; // placeholder
+        msg.missionState    = missionController.state();
+        msg.statusFlags     = missionController.flags();
 
         bool sent = linkManager.sendTelemetry(msg);
         if (!sent) {
-            // Link busy (rate-limited) or down — buffer it.
+            // Link busy (rate-limited) or down —> buffer it.
             if (!storeForward.push(msg)) {
                 Serial.println("[loopRover] Store-forward buffer FULL, dropping sample");
             }
@@ -91,12 +96,15 @@ void loopRover() {
         }
     }
 
-    // 3. Handle inbound commands from GCS -> forward to Pi.
+    // 3. Handle inbound commands from GCS. Routed through
+    //    missionController.applyCommand() rather than acted on directly
     linkManager.update();
     if (linkManager.hasNewCommand()) {
         const CommandMsg& cmd = linkManager.latestCommand();
+        bool applied = missionController.applyCommand(cmd);
         Serial.print("[loopRover] Command received: ");
-        Serial.println(static_cast<int>(cmd.command));
+        Serial.print(static_cast<int>(cmd.command));
+        Serial.println(applied ? " (applied)" : " (REFUSED -- low battery return in progress)");
         uartBridge.sendToPi(TelemetryMsg{}); // placeholder — replace with a
                                               // dedicated "forward command to
                                               // Pi" call once uart_bridge grows
@@ -109,31 +117,32 @@ void loopRover() {
     if (linkManager.isLinkLost()) {
         Serial.println("[loopRover] LINK LOST — safe-state should trigger here");
     }
+
+    // plan b : if link is lost for too long , strategies could be to reconnect 
+    //         then maybe to restart then finally to return to base.
 }
 #endif
 
 #if defined(NODE_ROLE_GCS)
-// ------------------------------------------------------------
-// GCS role: relay any received telemetry to the PC over USB
-// serial (as simple line-based debug output for now — swap for
-// a real framed protocol once Foxglove/GCS software consumes it).
-// ------------------------------------------------------------
+// GCS role: relay any received telemetry to the PC over USB serial 
 void loopGcs() {
     linkManager.update();
 
     if (linkManager.hasNewTelemetry()) {
         const TelemetryMsg& t = linkManager.latestTelemetry();
-        Serial.printf("[loopGcs] Telemetry: batt=%d%% pos=(%.2f,%.2f) status=%d rssi=%d\n",
+        Serial.printf("[loopGcs] Telemetry: batt=%d%% pos=(%.2f,%.2f) mission=%d flags=0x%02X rssi=%d\n",
                       t.batteryPercent, t.posX, t.posY,
-                      static_cast<int>(t.status), transport.getSignalStrength());
+                      static_cast<int>(t.missionState), t.statusFlags,
+                      transport.getSignalStrength());
+        // Note: if flags & StatusFlag::LOW_BATTERY, the GCS is only
+        // being INFORMED the rover is returning to base
     }
 
     if (linkManager.isLinkLost()) {
         Serial.println("[loopGcs] LINK LOST — no telemetry received recently");
     }
 
-    // TODO: read operator commands from USB serial (typed or from a
-    // GCS app) and call linkManager.sendCommand(...) here.
+    // TODO: read operator commands from USB serial and call linkManager.sendCommand(...) here.
 }
 #endif
 

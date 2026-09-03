@@ -1,0 +1,80 @@
+============================================================
+SETUP -- constructing rover and GCS stacks (main.cpp's job)
+============================================================
+[main.cpp] instantiated LoopbackTransport x2 (stand-in for WiFiTransport)
+[main.cpp] instantiated LinkManager x2, each holding a Transport* -- 
+           LinkManager itself does not know or care which concrete
+           Transport subtype it was given.
+[transport_*.cpp | ROVER radio] begin() -- radio initialized
+[transport_*.cpp | GCS radio] begin() -- radio initialized
+[main.cpp] instantiated StoreForwardBuffer (rover-side only)
+
+============================================================
+FLOW 1 -- Rover samples telemetry and sends it to the GCS
+============================================================
+[main.cpp | loopRover()] sampled rover state: battery=87% pos=(4.20,-1.05) status=NAVIGATING
+
+--- rover side send path ---
+[transport_*.cpp | ROVER radio] send() -- handing 20 raw bytes to the radio
+[link_manager.cpp] sendTelemetry() -- rate limiter allowed send: YES
+                   internally called Serializer::encode() (from serializer.h)
+                   to turn the TelemetryMsg struct into raw bytes, then
+                   handed those bytes to Transport::send().
+
+--- 'over the air' ---
+(20 raw bytes now sitting in gcsRadio's inbox queue -- no type
+ information travels, only bytes, per the earlier serialization demo)
+
+--- GCS side receive path ---
+[transport_*.cpp | GCS radio] receive() -- pulled 20 raw bytes off the radio
+[link_manager.cpp] update() -- called Transport::receive() (loopback_transport.h),
+                   got bytes back, called Serializer::peekType() (serializer.h)
+                   to read the type byte, then Serializer::decode() into a
+                   TelemetryMsg struct.
+
+[main.cpp | loopGcs()] GCS now has new telemetry:
+    seqNum=0 battery=87% pos=(4.20,-1.05)
+    -> matches what the rover sampled: DELIVERY CONFIRMED
+
+============================================================
+FLOW 2 -- Operator issues a command from the GCS to the rover
+============================================================
+[main.cpp | loopGcs()] operator requested RETURN_TO_BASE
+
+--- GCS side send path ---
+[transport_*.cpp | GCS radio] send() -- handing 15 raw bytes to the radio
+[link_manager.cpp] sendCommand() -- NOT rate-limited (commands are
+                   operator-triggered, must go out immediately).
+                   Serializer::encode() (serializer.h) -> Transport::send()
+                   result: handed to radio
+
+--- rover side receive path ---
+[transport_*.cpp | ROVER radio] receive() -- pulled 15 raw bytes off the radio
+[link_manager.cpp] update() -- Transport::receive() (loopback_transport.h)
+                   -> Serializer::peekType() + Serializer::decode() (serializer.h)
+
+[main.cpp | loopRover()] rover now has a new command:
+    seqNum=0 command=RETURN_TO_BASE
+    -> rover would now act on this in its own control logic
+
+============================================================
+FLOW 3 -- Link drops mid-mission: StoreForwardBuffer catches telemetry
+============================================================
+[demo] simulating an outage: roverRadio.setLinkUp(false)
+
+[main.cpp | loopRover()] sampled telemetry during outage: battery=81%
+[transport_*.cpp | ROVER radio] send() -- LINK DOWN, refusing to send 20 bytes
+[link_manager.cpp] sendTelemetry() -> Transport::send() returned false (link down)
+[buffer.cpp] push() -- sample held in ring buffer instead of discarded: OK
+
+[demo] link recovers: roverRadio.setLinkUp(true)
+[buffer.cpp] pop() -- draining buffered sample now that link is back
+[transport_*.cpp | ROVER radio] send() -- handing 20 raw bytes to the radio
+[link_manager.cpp] sendTelemetry() -- re-send of buffered sample: SENT
+[transport_*.cpp | GCS radio] receive() -- pulled 20 raw bytes off the radio
+[main.cpp | loopGcs()] GCS received the CATCH-UP sample: battery=81%
+    -> sample that would have been LOST is now delivered
+
+============================================================
+DONE
+============================================================

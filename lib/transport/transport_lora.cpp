@@ -1,13 +1,8 @@
 #include "transport_lora.h"
 
-// ============================================================
 // STUB IMPLEMENTATION
-//
-// Deliberately non-functional placeholders so the project compiles
-// cleanly today, and so the file/class shape is already in place
-// when you start Phase B. Fill these in per the TODOs in the header
-// once LoRa hardware is on the bench (COMMS-7 → COMMS-8).
-// ============================================================
+
+// Deliberately stubbed out waiting for Phase B (SX1262 radio) to be implemented. 
 
 LoRaTransport::LoRaTransport(float frequencyMHz)
     : _frequencyMHz(frequencyMHz) {}

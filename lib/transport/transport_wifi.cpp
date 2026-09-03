@@ -42,7 +42,7 @@ bool WiFiTransport::begin() {
 
 bool WiFiTransport::send(const uint8_t* data, size_t len) {
     if (!_peerKnown) {
-        // GCS hasn't heard from the rover yet — nothing to send to.
+        // GCS hasn't heard from the rover yet so nothing to send to.
         return false;
     }
     _udp.beginPacket(_peerIP, _port);
@@ -56,8 +56,8 @@ int WiFiTransport::receive(uint8_t* buffer, size_t maxLen) {
 
     // Learn/refresh the peer's address from whatever just arrived.
     // On the GCS side this is how we discover the rover's IP the
-    // first time it speaks; on the rover side it just reconfirms
-    // the (already known) AP address.
+    // first time it speaks
+    // on the rover side it just reconfirms the (already known) AP address.
     _peerIP = _udp.remoteIP();
     _peerKnown = true;
 

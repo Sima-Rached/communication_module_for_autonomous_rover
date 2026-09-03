@@ -1,28 +1,20 @@
 #pragma once
 #include "../transport/transport.h"
 #include "../protocol/message.h"
+#include "sequence_tracker.h"
+#include "rate_limiter.h"
+#include "link_health_monitor.h"
 
-// millis() is provided by Arduino.h on-device. For native/host unit
-// tests, the test file supplies its own millis() and this declaration
-// just lets link_manager.cpp link against it either way.
-#ifdef UNIT_TEST
-uint32_t millis();
-#else
-#include <Arduino.h>
-#endif
 
-// ============================================================
-// LinkManager (COMMS-10 and friends)
-//
-// Owns: outgoing sequence numbers, last-received-message timestamp,
-// comms-loss detection, and a self-imposed send-rate limit.
-//
-// The send-rate limit exists specifically so Phase A (WiFi) testing
-// doesn't build habits/protocols that would violate LoRa's EU868 duty
-// cycle limits once you swap transports in Phase B. Tune
-// MIN_SEND_INTERVAL_MS to whatever your team decides is a realistic
-// LoRa cadence (a few seconds between messages, not continuous).
-// ============================================================
+// LinkManager's single responsibility is
+// orchestration: encode a message, ask its collaborators whether/how
+// to send it, hand bytes to the Transport, and decode whatever comes
+// back.
+
+//collaborators:
+//   - SequenceTracker    -> sequencing scheme changes
+//   - RateLimiter        -> throttle/duty-cycle policy changes
+//   - LinkHealthMonitor   -> loss-detection strategy changes
 
 class LinkManager {
 public:
@@ -46,18 +38,18 @@ public:
     const CommandMsg& latestCommand() const { return _latestCommand; }
 
     // NFR-SAF-01: has the peer gone silent beyond the timeout?
-    bool isLinkLost() const;
+    bool isLinkLost() const { return _health.isLinkLost(); }
 
-    uint32_t nextSeqNum() { return _outSeqNum++; }
+    uint32_t nextSeqNum() { return _sequencer.next(); }
 
     static constexpr uint32_t MIN_SEND_INTERVAL_MS = 3000;   // self-throttle, LoRa-realistic
     static constexpr uint32_t LINK_TIMEOUT_MS      = 15000;  // NFR-SAF-01 trigger point
 
 private:
     Transport* _transport;
-    uint32_t _outSeqNum = 0;
-    uint32_t _lastSendMs = 0;
-    uint32_t _lastReceiveMs = 0;
+    SequenceTracker    _sequencer;
+    RateLimiter        _rateLimiter{MIN_SEND_INTERVAL_MS};
+    LinkHealthMonitor  _health{LINK_TIMEOUT_MS};
 
     bool _hasNewTelemetry = false;
     bool _hasNewCommand = false;
@@ -65,4 +57,9 @@ private:
     CommandMsg _latestCommand;
 
     void _handleIncoming(const uint8_t* buffer, int len);
+
+    // Shared send path for telemetry/command to avoid duplicating
+    // the encode+transport->send() sequence in both public methods.
+    template <typename MsgT>
+    bool _encodeAndSend(MsgT& msg);
 };

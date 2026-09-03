@@ -11,10 +11,11 @@ void UartBridge::begin() {
 bool UartBridge::receiveFromPi(CommandMsg& outMsg) {
     // Simplest possible framing for the prototype: if at least
     // sizeof(CommandMsg) bytes are waiting, try to decode them.
+    
     // NOTE: this has no start/end delimiter yet, so it assumes
     // clean, whole-message writes from the Pi side. Add a proper
-    // framing byte (e.g. 0x7E ... 0x7E) before this leaves prototype
-    // stage — noted here rather than silently deferred.
+    // framing byte (e.g. 0x7E ... 0x7E) in the future.
+    
     if (_serial.available() < (int)sizeof(CommandMsg)) return false;
 
     uint8_t buffer[sizeof(CommandMsg)];
